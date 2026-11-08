@@ -22,6 +22,7 @@ import { PageShell, PageHeader } from '@/components/common/page-shell';
 import { GlassPanel } from '@/components/ui/glass-panel';
 import { Button } from '@/components/ui/button';
 import { UpdateBadge } from '@/components/ui/update-badge';
+import { usePwaInstall } from '@/lib/utils/pwa';
 import { cn } from '@/lib/utils/cn';
 
 const REPO = 'amkyawdev/recap-studio';
@@ -33,19 +34,21 @@ const RELEASES = `https://github.com/${REPO}/releases`;
  */
 
 export default function DownloadPage() {
-  const [installed, setInstalled] = useState(false);
+  const { state, promptInstall } = usePwaInstall();
+  const [notice, setNotice] = useState<string | null>(null);
 
   const installPwa = async () => {
-    const prompt = (window as unknown as { __recapInstallPrompt?: { prompt: () => Promise<void> } })
-      .__recapInstallPrompt;
-    if (prompt) {
-      await prompt.prompt();
-      setInstalled(true);
-      return;
+    const outcome = await promptInstall();
+    if (outcome === 'manual') {
+      setNotice('Use your browser menu → "Install app" or "Add to Home Screen".');
+    } else if (outcome === 'dismissed') {
+      setNotice('Install dismissed. You can install any time from this page.');
+    } else {
+      setNotice('Installing — look for the Recap Studio icon on your home screen.');
     }
-    // No captured prompt — guide the user to the browser menu.
-    alert('Use your browser menu → "Install app" / "Add to Home Screen".');
   };
+
+  const installed = state === 'installed';
 
   return (
     <PageShell>
@@ -78,14 +81,25 @@ export default function DownloadPage() {
           </ul>
 
           <Button
-            variant="primary"
+            variant={installed ? 'glass' : 'primary'}
             size="md"
             icon={installed ? CheckCircle2 : MonitorSmartphone}
             onClick={() => void installPwa()}
+            disabled={installed}
             className="w-full"
           >
-            {installed ? 'Installed' : 'Install app'}
+            {installed ? 'Already installed' : 'Install app'}
           </Button>
+
+          {notice && (
+            <p className="mt-2.5 text-2xs leading-relaxed text-white/45">{notice}</p>
+          )}
+
+          {state === 'unsupported' && !notice && (
+            <p className="mt-2.5 text-2xs leading-relaxed text-white/35">
+              This browser has not offered an install prompt. Use the browser menu to install.
+            </p>
+          )}
         </GlassPanel>
 
         {/* FFmpeg core */}

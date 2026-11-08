@@ -111,6 +111,21 @@ jobs:
           path: ffmpeg-core
         continue-on-error: true
 
+      - name: Verify the bundle is present and sane
+        run: |
+          set -euo pipefail
+          test -f recap-studio-standalone.tar.gz || { echo "::error::bundle artifact missing"; exit 1; }
+          tar -tzf recap-studio-standalone.tar.gz > /tmp/bundle.txt
+          for required in server.js package.json .next/static public/manifest.json public/sw.js; do
+            if grep -q "^\./${required}" /tmp/bundle.txt; then
+              echo "ok   ${required}"
+            else
+              echo "::error::bundle is missing ${required}"
+              exit 1
+            fi
+          done
+          echo "bundle entries: $(wc -l < /tmp/bundle.txt)"
+
       - name: Package ffmpeg core
         run: |
           set -euo pipefail
@@ -118,8 +133,17 @@ jobs:
             tar -czf ffmpeg-core-${{ github.ref_name }}.tar.gz -C ffmpeg-core .
             ls -lh ffmpeg-core-${{ github.ref_name }}.tar.gz
           else
-            echo "No ffmpeg core artifact found; skipping."
+            echo "::warning::No ffmpeg core artifact found; the release will ship without it."
           fi
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          sha256sum recap-studio-standalone.tar.gz > SHA256SUMS.txt
+          if [ -f ffmpeg-core-${{ github.ref_name }}.tar.gz ]; then
+            sha256sum ffmpeg-core-${{ github.ref_name }}.tar.gz >> SHA256SUMS.txt
+          fi
+          cat SHA256SUMS.txt
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -129,9 +153,39 @@ jobs:
           files: |
             recap-studio-standalone.tar.gz
             ffmpeg-core-*.tar.gz
+            SHA256SUMS.txt
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Confirm the release is public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
+          for attempt in 1 2 3 4 5; do
+            if body=$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" "$api"); then
+              printf '%s' "$body" > /tmp/release.json
+              python3 - <<'PY'
+          import json
+          release = json.load(open('/tmp/release.json'))
+          assets = release.get('assets', [])
+          print(f"release {release['tag_name']} published with {len(assets)} asset(s)")
+          for asset in assets:
+              print(f"  - {asset['name']}  {asset['size']} bytes")
+          if not assets:
+              raise SystemExit('::error::release has no assets attached')
+          PY
+              exit 0
+            fi
+            echo "release not visible yet (attempt ${attempt}); retrying"
+            sleep 5
+          done
+          echo "::error::release was not published"
+          exit 1
 
   relay:
     name: Validate Cloudflare Worker
