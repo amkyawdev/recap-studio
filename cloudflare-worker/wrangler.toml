@@ -1,0 +1,18 @@
+name = "recap-relay"
+main = "index.js"
+compatibility_date = "2024-09-23"
+
+# Optional: bind a KV namespace named RATE_LIMIT for cross-isolate rate limiting.
+# Without it the worker falls back to a per-isolate in-memory token bucket.
+#
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT"
+# id = "<your-kv-namespace-id>"
+
+[vars]
+# Comma-separated origins allowed to call the relay. "*" allows any origin
+# (fine for local development, not recommended for production).
+ALLOWED_ORIGINS = "*"
+
+[observability]
+enabled = true

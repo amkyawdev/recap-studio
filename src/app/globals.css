@@ -1,0 +1,199 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ *
+ * Recap Studio — design tokens
+ * A dark grading-suite aesthetic: pitch black canvas, matte charcoal
+ * panels, electric-violet signal and metallic-gold accents.
+ * ------------------------------------------------------------------ */
+
+@layer base {
+  :root {
+    --violet: 139 92 246;
+    --gold: 212 160 23;
+    --green: 62 207 142;
+    --amber: 227 184 78;
+    --red: 255 92 92;
+
+    --hairline: rgba(255, 255, 255, 0.08);
+    --dock-h: 68px;
+  }
+
+  * {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-void text-white/90 antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
+    overscroll-behavior-y: none;
+  }
+
+  ::selection {
+    background: rgba(var(--violet), 0.35);
+    color: #fff;
+  }
+
+  /* Sleek scrollbars — a studio console, not a document window. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.09);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.18);
+    background-clip: content-box;
+  }
+
+  input,
+  textarea,
+  select {
+    @apply bg-transparent;
+  }
+
+  /* Kill the autofill blue — it ruins a black canvas. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:focus {
+    -webkit-text-fill-color: #fff;
+    -webkit-box-shadow: 0 0 0 1000px #121215 inset;
+    caret-color: #fff;
+  }
+
+  :focus-visible {
+    outline: none;
+    @apply ring-2 ring-violet-500/60 ring-offset-0;
+  }
+}
+
+@layer components {
+  /* Frosted glass — the workhorse surface. */
+  .glass {
+    @apply border border-white/[0.08] bg-white/[0.03] backdrop-blur-xl;
+  }
+
+  .glass-strong {
+    @apply border border-white/[0.10] bg-white/[0.055] backdrop-blur-2xl;
+  }
+
+  .glass-matte {
+    @apply border border-white/[0.07] bg-ink-700/80 backdrop-blur-xl;
+  }
+
+  /* Pill button base with a tactile press effect. */
+  .pill {
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-full
+      text-xs font-medium leading-none transition-all duration-150
+      active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .hairline-t {
+    @apply border-t border-white/[0.07];
+  }
+
+  .hairline-b {
+    @apply border-b border-white/[0.07];
+  }
+
+  /* Panel heading kicker — small, tracked-out, technical. */
+  .kicker {
+    @apply font-mono text-2xs uppercase tracking-[0.18em] text-white/40;
+  }
+
+  .mono-num {
+    @apply font-mono tabular-nums;
+  }
+
+  /* The signature violet→gold signal gradient. */
+  .signal-text {
+    @apply bg-gradient-to-r from-violet-400 via-white to-gold-300 bg-clip-text text-transparent;
+  }
+
+  .signal-bar {
+    background: linear-gradient(
+      90deg,
+      rgba(var(--violet), 0) 0%,
+      rgba(var(--violet), 0.9) 35%,
+      rgba(var(--gold), 0.95) 65%,
+      rgba(var(--gold), 0) 100%
+    );
+  }
+}
+
+@layer utilities {
+  /* Fine grain overlay — depth without a visible texture. */
+  .noise::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .grid-lines {
+    background-image: linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .mask-fade-b {
+    -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+  }
+
+  .mask-fade-x {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+    mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+  }
+
+  .safe-b {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  .perspective-1000 {
+    perspective: 1000px;
+  }
+}
+
+/* Respect reduced-motion for the heavier decorative loops. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

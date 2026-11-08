@@ -1,0 +1,63 @@
+{
+  "name": "Recap Studio — AI Video Recap Engine",
+  "short_name": "Recap Studio",
+  "description": "Turn long-form video into cinematic 3-minute recaps. BYOK AI pipeline and client-side FFmpeg rendering.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "categories": ["video", "productivity", "utilities"],
+  "lang": "en",
+  "dir": "ltr",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/assets/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Editor",
+      "short_name": "Editor",
+      "url": "/editor",
+      "description": "Open the recap editor"
+    },
+    {
+      "name": "Upload",
+      "short_name": "Upload",
+      "url": "/upload",
+      "description": "Bring in a source and transcribe it"
+    },
+    {
+      "name": "API Settings",
+      "short_name": "Keys",
+      "url": "/api-settings",
+      "description": "Manage your provider keys"
+    }
+  ]
+}
