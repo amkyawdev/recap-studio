@@ -224,8 +224,41 @@ Everything is optional — the studio runs fully client-side with nothing set. S
 | Variable | Effect |
 | --- | --- |
 | `NEXT_PUBLIC_RELAY_URL` | Route provider calls through your Cloudflare Worker |
-| `NEXT_PUBLIC_FIREBASE_*` | Enable Google / SMS-OTP sign-in; absent → local profile |
+| `NEXT_PUBLIC_FIREBASE_API_KEY` | Firebase web config (required to enable auth) |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Firebase web config (required to enable auth) |
+| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Firebase web config (required to enable auth) |
+| `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | Firebase web config |
+| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Firebase web config |
+| `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase web config |
+| `NEXT_PUBLIC_FIREBASE_DATABASE_URL` | Realtime Database URL, if a feature reads from RTDB |
+| `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` | Set this to switch Analytics **on**; unset ships no telemetry |
 | `ALLOWED_ORIGINS` | (relay) comma-separated origin allow-list |
+
+Auth and Analytics are both opt-in: with the three required Firebase keys absent, sign-in
+falls back to a device-local profile and `initAnalytics()` no-ops.
+
+### Deploying to Vercel
+
+```bash
+# 1. Link the project (writes .vercel/project.json)
+npx vercel link
+
+# 2. Push every variable to production, preview and development
+VERCEL_TOKEN=... ./scripts/setup-vercel-env.sh <project-name> [team-scope]
+
+# 3. Redeploy so the values take effect
+npx vercel --prod
+```
+
+`scripts/setup-vercel-env.sh` upserts each key (create, or update when it already exists)
+across all three targets and prints the resulting list. It needs a token that is valid for
+the target scope — **Vercel tokens are scope-bound**, so a personal token will not work
+against a team project and vice versa. Create one at
+<https://vercel.com/account/tokens>.
+
+The Firebase web config values are public by design (they ship to the browser). The Vercel
+token is a secret: the script only ever reads it from `$VERCEL_TOKEN` and never writes it
+to disk.
 
 ## Project layout
 
@@ -273,6 +306,7 @@ src/
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run fetch:ffmpeg` | Download the FFmpeg core into `public/ffmpeg` |
 | `npm run screenshots` | Regenerate the README screenshot (dev server + Playwright) |
+| `./scripts/setup-vercel-env.sh` | Push environment variables to Vercel |
 | `npm run relay:dev` | Run the Cloudflare Worker relay locally |
 | `npm run relay:deploy` | Deploy the relay |
 

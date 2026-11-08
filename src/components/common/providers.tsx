@@ -4,6 +4,7 @@ import { MotionConfig } from 'framer-motion';
 import { useEffect } from 'react';
 import { useEditorStore } from '@/store/use-editor-store';
 import { useApiKeysStore } from '@/store/use-api-keys-store';
+import { initAnalytics } from '@/lib/firebase/config';
 
 /**
  * Client-side app shell providers.
@@ -12,6 +13,11 @@ import { useApiKeysStore } from '@/store/use-api-keys-store';
  * Framer Motion to respect the OS reduced-motion setting.
  */
 export function Providers({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    // Opt-in, browser-only: no-ops unless a measurement id is configured.
+    void initAnalytics();
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
     if (process.env.NODE_ENV !== 'production') return;
