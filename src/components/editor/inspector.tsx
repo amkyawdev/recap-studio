@@ -1,9 +1,10 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   Captions,
   Download,
+  Languages,
   Layers2,
   Music4,
   Scissors,
@@ -22,12 +23,14 @@ import {
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useEditorStore, clipDuration, clipEnd, type InspectorTab } from '@/store/use-editor-store';
+import { useApiKeysStore } from '@/store/use-api-keys-store';
 import { GlassPanel } from '@/components/ui/glass-panel';
 import { Button } from '@/components/ui/button';
 import { Segmented } from '@/components/ui/segmented';
 import { AnimatedModal } from '@/components/ui/animated-modal';
 import { SubtitleTimeline } from '@/components/editor/subtitle-timeline';
 import { ASPECT_PRESETS, ASPECTS, type AspectRatio } from '@/lib/ffmpeg/render-engine';
+import { GEMINI_TEXT_MODELS, LANGUAGES, findLanguage, translateCues } from '@/lib/api/gemini';
 import { cn } from '@/lib/utils/cn';
 import { formatClock } from '@/lib/utils/format';
 
@@ -352,6 +355,10 @@ function TextInspector() {
         </div>
       </div>
 
+      <div className="hairline-t pt-3">
+        <TranslatePanel />
+      </div>
+
       <AnimatedModal
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
@@ -364,6 +371,211 @@ function TextInspector() {
         </div>
       </AnimatedModal>
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Translate                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Subtitle translation.
+ *
+ * Translating swaps the *text* of each cue while its timings stay untouched, so
+ * a translation survives retiming, trimming and reordering. Pick a language,
+ * run it, and the timeline, the preview burn-in, the narration and the export
+ * all switch together — `activeLanguage` is the one switch.
+ */
+function TranslatePanel() {
+  const cues = useEditorStore((s) => s.cues);
+  const translations = useEditorStore((s) => s.translations);
+  const activeLanguage = useEditorStore((s) => s.activeLanguage);
+  const setActiveLanguage = useEditorStore((s) => s.setActiveLanguage);
+  const applyTranslation = useEditorStore((s) => s.applyTranslation);
+  const clearTranslation = useEditorStore((s) => s.clearTranslation);
+  const setTranslating = useEditorStore((s) => s.setTranslating);
+  const translating = useEditorStore((s) => s.translating);
+  const progress = useEditorStore((s) => s.translateProgress);
+  const translateError = useEditorStore((s) => s.translateError);
+  const getRouter = useApiKeysStore((s) => s.getRouter);
+  const hasGemini = useApiKeysStore((s) => Boolean(s.keys.gemini));
+
+  const [target, setTarget] = useState('my');
+  const [model, setModel] = useState('gemini-2.5-flash');
+
+  const available = Object.keys(translations);
+  const language = findLanguage(target);
+  const done = progress ? progress.done : 0;
+  const total = progress ? progress.total : cues.length;
+  const ratio = total > 0 ? done / total : 0;
+
+  const run = async () => {
+    if (!language || cues.length === 0) return;
+    if (!hasGemini) {
+      setTranslating({ error: 'Add a Gemini key in API Settings to translate.' });
+      return;
+    }
+    setTranslating({ translating: true, progress: { done: 0, total: cues.length }, error: null });
+
+    try {
+      const ordered = cues.slice().sort((a, b) => a.start - b.start);
+      const result = await translateCues(getRouter(), {
+        lines: ordered.map((c) => c.text),
+        target: language.label,
+        model,
+        onProgress: (d, t) => setTranslating({ progress: { done: d, total: t } }),
+      });
+
+      const byCueId: Record<string, string> = {};
+      ordered.forEach((cue, i) => {
+        byCueId[cue.id] = result.lines[i] ?? cue.text;
+      });
+      applyTranslation(language.code, byCueId);
+
+      if (result.keptOriginal > 0) {
+        setTranslating({
+          error: `${result.keptOriginal} of ${ordered.length} lines came back unchanged and may not be translated. Check the track before rendering.`,
+        });
+      }
+    } catch (error) {
+      setTranslating({
+        translating: false,
+        progress: null,
+        error: error instanceof Error ? error.message : 'Translation failed.',
+      });
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="kicker flex items-center gap-1.5">
+        <Languages className="size-3" />
+        Translate subtitles
+      </p>
+
+      <Field label="Target language" hint={language?.native}>
+        <div className="relative">
+          <select
+            value={target}
+            disabled={translating}
+            onChange={(e) => setTarget(e.target.value)}
+            className="h-9 w-full appearance-none rounded-xl border border-white/[0.09] bg-black/40 px-3 pr-8 text-[13px] text-white/85 focus:border-violet-500/50 focus:outline-none disabled:opacity-60"
+          >
+            {LANGUAGES.map((option) => (
+              <option key={option.code} value={option.code} className="bg-ink-700">
+                {option.label} — {option.native}
+              </option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/30">▾</span>
+        </div>
+      </Field>
+
+      <Field label="Model" hint={model === 'gemini-2.5-flash' ? 'fast' : 'quality'}>
+        <div className="relative">
+          <select
+            value={model}
+            disabled={translating}
+            onChange={(e) => setModel(e.target.value)}
+            className="h-9 w-full appearance-none rounded-xl border border-white/[0.09] bg-black/40 px-3 pr-8 text-[13px] text-white/85 focus:border-violet-500/50 focus:outline-none disabled:opacity-60"
+          >
+            {GEMINI_TEXT_MODELS.map((m) => (
+              <option key={m.id} value={m.id} className="bg-ink-700">
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/30">▾</span>
+        </div>
+      </Field>
+
+      <div className="flex flex-wrap gap-1.5">
+        <Button
+          size="sm"
+          variant="primary"
+          icon={Languages}
+          loading={translating}
+          disabled={translating || cues.length === 0}
+          onClick={() => void run()}
+        >
+          {translations[target] ? 'Re-translate' : `Translate to ${language?.label ?? target}`}
+        </Button>
+        {translations[target] && (
+          <Button size="sm" variant="ghost" icon={Trash2} disabled={translating} onClick={() => clearTranslation(target)}>
+            Remove
+          </Button>
+        )}
+      </div>
+
+      {/* Progress */}
+      <AnimatePresence>
+        {translating && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-2xs text-white/45">
+                <span>Translating {done} / {total} cues</span>
+                <span className="mono-num">{Math.round(ratio * 100)}%</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+                <motion.div className="signal-bar h-full" animate={{ width: `${ratio * 100}%` }} />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {translateError && <p className="text-2xs text-signal-amber">{translateError}</p>}
+
+      {/* Track switcher */}
+      {available.length > 0 && (
+        <Field label="Subtitle track" hint={activeLanguage ? findLanguage(activeLanguage)?.native : 'original'}>
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveLanguage(null)}
+              className={cn(
+                'flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-2xs transition-colors',
+                !activeLanguage
+                  ? 'border-violet-500/40 bg-violet-500/[0.10] text-white'
+                  : 'border-white/[0.08] text-white/55 hover:text-white',
+              )}
+            >
+              <span>Original</span>
+              <span className="mono-num text-white/35">{cues.length} cues</span>
+            </button>
+            {available.map((code) => {
+              const meta = findLanguage(code);
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => setActiveLanguage(code)}
+                  className={cn(
+                    'flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-2xs transition-colors',
+                    activeLanguage === code
+                      ? 'border-violet-500/40 bg-violet-500/[0.10] text-white'
+                      : 'border-white/[0.08] text-white/55 hover:text-white',
+                  )}
+                >
+                  <span>
+                    {meta?.label ?? code}
+                    {meta && <span className="ml-1.5 text-white/35">{meta.native}</span>}
+                  </span>
+                  <span className="mono-num text-white/35">
+                    {Object.keys(translations[code]).length} cues
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+      )}
+
+      <p className="text-2xs leading-relaxed text-white/35">
+        The active track drives the timeline, the preview burn-in, the narration and the exported SRT.
+        Timings are shared, so switching languages never re-times the edit.
+      </p>
+    </div>
   );
 }
 

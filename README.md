@@ -70,6 +70,9 @@ NLE-style editor, and the supporting hubs for keys, sources and releases.
   again inside the argument vector.
 - **Multi-provider narration.** ElevenLabs or Gemini TTS, with a live waveform and
   instant MP3/WAV export.
+- **Subtitle translation.** Extract an SRT, then translate it into Burmese, Thai,
+  Vietnamese and eight more languages — timings are shared, so the edit never
+  needs re-timing. The active track drives the timeline, burn-in, narration and export.
 - **Mobile-first console.** Floating bottom dock, panel switcher, and an inspector that
   becomes a bottom sheet on a phone.
 
@@ -135,9 +138,62 @@ Four context tabs, and the panel follows what you last touched on the timeline �
 clip opens **Clip**, tapping a subtitle block opens **Text**.
 
 - **Clip** — speed presets, trim in/out, opacity, clip volume, split/duplicate/mute/delete.
-- **Text** — per-cue text and timing, plus the subtitle style (size, margin, bold, caps, box).
+- **Text** — per-cue text and timing, subtitle style, SRT import/export, auto-sync, and
+  the **Translate** panel.
 - **Audio** — narration playback and the music-bed level.
 - **Effects** — aspect ratio, watermark layer, and sequence timing against the ceiling.
+
+## Translating subtitles
+
+The pipeline is: **movie → SRT → translation → burn-in**, and it can be run from either
+end of the app.
+
+### From the Upload page
+
+1. **Transcribe with AssemblyAI** — word-level timings become SRT cues.
+2. Pick a target language in the sidebar.
+3. **Translate subtitles** — progress runs batch by batch.
+
+### From the editor
+
+Text inspector → **Translate subtitles** → pick a language → **Translate to …**.
+
+### How a translation is stored
+
+Timings live only on `cues`. A translation is a map of `cueId → translated text`:
+
+```ts
+translations: Record<languageCode, Record<cueId, string>>
+activeLanguage: string | null   // null = original
+```
+
+That is the whole model. Because the translation is keyed by cue id and carries no
+timings of its own, it **survives retiming, trimming, splitting and reordering**
+automatically — there is no second timeline to keep in sync. `localizeCues()` overlays the
+map onto the cue list, and `activeLanguage` is the single switch that drives:
+
+| Surface | Follows the active track |
+| --- | --- |
+| Timeline subtitle blocks | yes |
+| Preview burn-in | yes |
+| Narration transcript | yes |
+| Exported SRT | yes |
+| The rendered MP4's subtitles | yes (`buildPlan()` burns the active cues) |
+
+Switch tracks from the **Subtitle track** list in the inspector, or click the language
+badge in the editor's top bar to jump back to the original.
+
+### Translation reliability
+
+The model is asked for a JSON array of exactly the same length as the input. If it breaks
+that contract, the batch is retried **line by line**, and any line that still fails keeps
+its source text. A translation run therefore never loses a cue and never produces a blank
+subtitle — at worst a line stays in the original language, and the UI says how many did:
+
+> *1 of 4 lines came back unchanged and may not be translated.*
+
+Batches are 40 lines. To add a language, extend `LANGUAGES` in
+`src/lib/api/gemini.ts` — that array is the only place the list is defined.
 
 ## Configuration
 

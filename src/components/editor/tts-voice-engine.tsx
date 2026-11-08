@@ -17,7 +17,7 @@ import { GlassPanel } from '@/components/ui/glass-panel';
 import { Button } from '@/components/ui/button';
 import { Segmented } from '@/components/ui/segmented';
 import { StatusPill } from '@/components/ui/status-pill';
-import { useEditorStore, type TtsProvider } from '@/store/use-editor-store';
+import { useEditorStore, localizeCues, type TtsProvider } from '@/store/use-editor-store';
 import { useApiKeysStore } from '@/store/use-api-keys-store';
 import { generateElevenSpeech, ELEVEN_VOICES, ELEVEN_MODELS } from '@/lib/api/elevenlabs';
 import { generateGeminiSpeech, GEMINI_VOICES, GEMINI_TEXT_MODELS } from '@/lib/api/gemini';
@@ -35,7 +35,9 @@ import { seededRandom } from '@/lib/utils/format';
  */
 
 export function TtsVoiceEngine() {
-  const cues = useEditorStore((s) => s.cues);
+  const rawCues = useEditorStore((s) => s.cues);
+  const translations = useEditorStore((s) => s.translations);
+  const activeLanguage = useEditorStore((s) => s.activeLanguage);
   const voice = useEditorStore((s) => s.voice);
   const setVoice = useEditorStore((s) => s.setVoice);
   const keys = useApiKeysStore((s) => s.keys);
@@ -45,7 +47,11 @@ export function TtsVoiceEngine() {
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const transcript = useMemo(() => toTranscript(cues), [cues]);
+  // Narration speaks whatever language is active on the timeline.
+  const transcript = useMemo(
+    () => toTranscript(localizeCues(rawCues, translations, activeLanguage)),
+    [rawCues, translations, activeLanguage],
+  );
   const voices = voice.provider === 'elevenlabs' ? ELEVEN_VOICES : GEMINI_VOICES;
   const models = ELEVEN_MODELS;
   const keyPresent = Boolean(keys[voice.provider]);

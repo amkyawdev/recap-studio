@@ -20,7 +20,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useEditorStore, clipEnd, clipDuration, type Clip } from '@/store/use-editor-store';
+import { useEditorStore, clipEnd, clipDuration, localizeCues, type Clip } from '@/store/use-editor-store';
 import { cn } from '@/lib/utils/cn';
 import { formatClock } from '@/lib/utils/format';
 
@@ -57,7 +57,9 @@ const LANES: {
 
 export function VideoTimeline() {
   const clips = useEditorStore((s) => s.clips);
-  const cues = useEditorStore((s) => s.cues);
+  const rawCues = useEditorStore((s) => s.cues);
+  const translations = useEditorStore((s) => s.translations);
+  const activeLanguage = useEditorStore((s) => s.activeLanguage);
   const music = useEditorStore((s) => s.music);
   const voice = useEditorStore((s) => s.voice);
   const watermark = useEditorStore((s) => s.watermark);
@@ -98,6 +100,13 @@ export function VideoTimeline() {
   const sequenceLength = useMemo(
     () => clips.reduce((max, c) => Math.max(max, clipEnd(c)), 0),
     [clips],
+  );
+
+  // Subtitle blocks render the active language; ids and timings are unchanged,
+  // so selection and dragging still address the original cue.
+  const cues = useMemo(
+    () => localizeCues(rawCues, translations, activeLanguage),
+    [rawCues, translations, activeLanguage],
   );
 
   // The scrollable content is always at least a little wider than the content

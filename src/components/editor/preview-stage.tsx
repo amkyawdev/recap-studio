@@ -3,7 +3,7 @@
 import { motion } from 'framer-motion';
 import { Maximize2, Play, RectangleHorizontal, RectangleVertical } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useEditorStore, clipAt, clipEnd, sequenceToSource } from '@/store/use-editor-store';
+import { useEditorStore, clipAt, clipEnd, localizeCues, sequenceToSource } from '@/store/use-editor-store';
 import { ASPECT_PRESETS } from '@/lib/ffmpeg/render-engine';
 import { cueAt } from '@/lib/utils/srt-parser';
 import { cn } from '@/lib/utils/cn';
@@ -20,7 +20,9 @@ import { cn } from '@/lib/utils/cn';
 export function PreviewStage() {
   const source = useEditorStore((s) => s.source);
   const clips = useEditorStore((s) => s.clips);
-  const cues = useEditorStore((s) => s.cues);
+  const rawCues = useEditorStore((s) => s.cues);
+  const translations = useEditorStore((s) => s.translations);
+  const activeLanguage = useEditorStore((s) => s.activeLanguage);
   const aspect = useEditorStore((s) => s.aspect);
   const setAspect = useEditorStore((s) => s.setAspect);
   const watermark = useEditorStore((s) => s.watermark);
@@ -36,6 +38,12 @@ export function PreviewStage() {
 
   const preset = ASPECT_PRESETS[aspect];
   const vertical = aspect === '9:16';
+
+  // Burn-in shows the active language, exactly like the render will.
+  const cues = useMemo(
+    () => localizeCues(rawCues, translations, activeLanguage),
+    [rawCues, translations, activeLanguage],
+  );
 
   const activeCue = useMemo(() => cueAt(cues, playhead), [cues, playhead]);
   const activeClip = useMemo(() => clipAt(clips, playhead), [clips, playhead]);

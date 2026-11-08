@@ -7,6 +7,7 @@ import {
   ClipboardPaste,
   FileText,
   Film,
+  Languages,
   Link2,
   Loader2,
   Sparkles,
@@ -25,7 +26,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { useEditorStore } from '@/store/use-editor-store';
 import { useApiKeysStore } from '@/store/use-api-keys-store';
 import { cuesToSrt, transcribe, wordsToCues } from '@/lib/api/assemblyai';
-import { generateRecapScript, GEMINI_TEXT_MODELS } from '@/lib/api/gemini';
+import { generateRecapScript, GEMINI_TEXT_MODELS, LANGUAGES, findLanguage, translateCues } from '@/lib/api/gemini';
 import { parseSRT } from '@/lib/utils/srt-parser';
 import { MAX_DURATION_SEC } from '@/lib/ffmpeg/render-engine';
 import { estimateSpeechSeconds, formatClock, formatBytes } from '@/lib/utils/format';
@@ -44,6 +45,9 @@ export default function UploadPage() {
   const setSource = useEditorStore((s) => s.setSource);
   const setCues = useEditorStore((s) => s.setCues);
   const loadSrt = useEditorStore((s) => s.loadSrt);
+  const setActiveLanguage = useEditorStore((s) => s.setActiveLanguage);
+  const translations = useEditorStore((s) => s.translations);
+  const applyTranslation = useEditorStore((s) => s.applyTranslation);
   const keys = useApiKeysStore((s) => s.keys);
   const getRouter = useApiKeysStore((s) => s.getRouter);
 
@@ -57,6 +61,8 @@ export default function UploadPage() {
   const [tone, setTone] = useState<'cinematic' | 'documentary' | 'energetic' | 'analytical'>('cinematic');
   const [script, setScript] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [targetLang, setTargetLang] = useState('my');
+  const [translateProgress, setTranslateProgress] = useState<{ done: number; total: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const youtubeId = useMemo(() => extractYouTubeId(url), [url]);
@@ -113,6 +119,62 @@ export default function UploadPage() {
       setError(err instanceof Error ? err.message : 'Transcription failed.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  /**
+   * Translate the extracted SRT into the target language.
+   *
+   * This is the "movie -> SRT -> Myanmar" step: the timings from AssemblyAI are
+   * kept, and only the text changes. The result is stored as a track and made
+   * active, so opening the editor lands on the translated subtitles.
+   */
+  const runTranslate = async () => {
+    setError(null);
+    if (!hasGemini) {
+      setError('Add a Gemini key in API Settings to translate subtitles.');
+      return;
+    }
+    const cues = parseSRT(srtText);
+    if (cues.length === 0) {
+      setError('Nothing to translate — transcribe the source or paste an SRT first.');
+      return;
+    }
+    const language = findLanguage(targetLang);
+    if (!language) return;
+
+    setBusy(true);
+    setTranslateProgress({ done: 0, total: cues.length });
+    setStatus(`Translating ${cues.length} cues to ${language.label}`);
+    try {
+      const result = await translateCues(getRouter(), {
+        lines: cues.map((c) => c.text),
+        target: language.label,
+        onProgress: (done, total) => {
+          setTranslateProgress({ done, total });
+          setStatus(`Translating to ${language.label} · ${done}/${total}`);
+        },
+      });
+
+      const byCueId: Record<string, string> = {};
+      cues.forEach((cue, i) => {
+        byCueId[cue.id] = result.lines[i] ?? cue.text;
+      });
+
+      // Make sure the editor sees these cues, then attach the track.
+      setCues(cues);
+      applyTranslation(language.code, byCueId);
+      setSrtText(cuesToSrt(cues.map((c) => ({ ...c, text: byCueId[c.id] ?? c.text }))));
+      setStatus(
+        result.keptOriginal > 0
+          ? `Translated ${cues.length} cues to ${language.label} — ${result.keptOriginal} line(s) came back unchanged.`
+          : `Translated ${cues.length} cues to ${language.label}.`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Translation failed.');
+    } finally {
+      setBusy(false);
+      setTranslateProgress(null);
     }
   };
 
@@ -327,6 +389,16 @@ export default function UploadPage() {
               >
                 Transcribe with AssemblyAI
               </Button>
+              <Button
+                size="md"
+                variant="gold"
+                icon={Languages}
+                loading={busy && status?.includes('Translating')}
+                disabled={busy || !hasGemini || !srtText.trim()}
+                onClick={() => void runTranslate()}
+              >
+                Translate subtitles
+              </Button>
               <Button size="md" variant="glass" icon={Sparkles} disabled={busy || !hasGemini} onClick={() => void runScript()}>
                 Draft recap script
               </Button>
@@ -334,6 +406,25 @@ export default function UploadPage() {
                 Open in editor
               </Button>
             </div>
+
+            {translateProgress && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-2xs text-white/45">
+                  <span>
+                    Translating to {findLanguage(targetLang)?.label} · {translateProgress.done}/{translateProgress.total}
+                  </span>
+                  <span className="mono-num">
+                    {Math.round((translateProgress.done / Math.max(1, translateProgress.total)) * 100)}%
+                  </span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+                  <div
+                    className="signal-bar h-full transition-[width] duration-300"
+                    style={{ width: `${(translateProgress.done / Math.max(1, translateProgress.total)) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             {!hasAssembly && mode === 'file' && (
               <p className="text-2xs text-signal-amber">
@@ -405,6 +496,47 @@ export default function UploadPage() {
 
         {/* Sidebar */}
         <div className="space-y-4">
+          <GlassPanel padding="md" className="space-y-3">
+            <h3 className="kicker flex items-center gap-1.5">
+              <Languages className="size-3 text-violet-400" />
+              Subtitle language
+            </h3>
+            <div className="relative">
+              <select
+                value={targetLang}
+                onChange={(e) => setTargetLang(e.target.value)}
+                className="h-9 w-full appearance-none rounded-xl border border-white/[0.09] bg-black/40 px-3 pr-8 text-[13px] text-white/85 focus:border-violet-500/50 focus:outline-none"
+              >
+                {LANGUAGES.map((option) => (
+                  <option key={option.code} value={option.code} className="bg-ink-700">
+                    {option.label} — {option.native}
+                  </option>
+                ))}
+              </select>
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/30">▾</span>
+            </div>
+            <p className="text-2xs leading-relaxed text-white/40">
+              Transcribe first, then translate. The timings from AssemblyAI are kept — only the text changes —
+              so the edit never needs re-timing.
+            </p>
+            {Object.keys(translations).length > 0 && (
+              <div className="space-y-1.5">
+                <span className="kicker">Tracks ready</span>
+                {Object.keys(translations).map((code) => (
+                  <button
+                    key={code}
+                    type="button"
+                    onClick={() => setActiveLanguage(code)}
+                    className="flex w-full items-center justify-between rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-2xs text-white/60 hover:text-white"
+                  >
+                    <span>{findLanguage(code)?.label ?? code}</span>
+                    <span className="mono-num text-white/35">{Object.keys(translations[code]).length} cues</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </GlassPanel>
+
           <GlassPanel padding="md" className="space-y-3">
             <h3 className="kicker">Script tone</h3>
             <div className="grid grid-cols-2 gap-1.5">

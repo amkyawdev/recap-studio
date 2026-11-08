@@ -94,6 +94,32 @@ export function sourceToSequence(clips: Clip[], sourceSec: number): number | nul
   return clip.startSec + (sourceSec - clip.inSec) / Math.max(0.1, clip.speed);
 }
 
+/**
+ * Overlay a translation onto a cue list.
+ *
+ * Pure so components can derive it inside a `useMemo` — a store selector that
+ * built a new array on every call would trip React's snapshot check.
+ * Cues with no translated line keep the original text, so a partial run still
+ * renders complete subtitles rather than gaps.
+ */
+export function localizeCues(
+  cues: Cue[],
+  translations: Record<string, Record<string, string>>,
+  language: string | null,
+): Cue[] {
+  if (!language) return cues;
+  const map = translations[language];
+  if (!map) return cues;
+  let changed = false;
+  const next = cues.map((cue) => {
+    const text = map[cue.id];
+    if (!text) return cue;
+    changed = true;
+    return { ...cue, text };
+  });
+  return changed ? next : cues;
+}
+
 export interface SourceVideo {
   kind: SourceKind;
   /** YouTube id, or the original file name. */
@@ -138,6 +164,27 @@ export interface EditorState {
   // ---- timeline -----------------------------------------------------
   cues: Cue[];
   selectedCueId: string | null;
+
+  /**
+   * Translations, keyed by language code then cue id.
+   *
+   * Timing lives only on `cues`; a translation swaps *text* for a given cue.
+   * That keeps one source of truth for the timeline and means a translation
+   * survives retiming, trimming and reordering automatically.
+   */
+  translations: Record<string, Record<string, string>>;
+  /** `null` renders the original language. */
+  activeLanguage: string | null;
+  translating: boolean;
+  translateProgress: { done: number; total: number } | null;
+  translateError: string | null;
+  setActiveLanguage: (code: string | null) => void;
+  applyTranslation: (code: string, byCueId: Record<string, string>) => void;
+  clearTranslation: (code: string) => void;
+  setTranslating: (patch: { translating?: boolean; progress?: { done: number; total: number } | null; error?: string | null }) => void;
+  /** The cue list as it should be rendered/exported right now. */
+  activeCues: () => Cue[];
+
   setCues: (cues: Cue[]) => void;
   loadSrt: (raw: string) => number;
   loadSample: () => void;
@@ -255,6 +302,42 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   cues: [],
   selectedCueId: null,
+  translations: {},
+  activeLanguage: null,
+  translating: false,
+  translateProgress: null,
+  translateError: null,
+
+  activeCues: () => {
+    const { cues, translations, activeLanguage } = get();
+    return localizeCues(cues, translations, activeLanguage);
+  },
+
+  setActiveLanguage: (activeLanguage) => set({ activeLanguage }),
+
+  applyTranslation: (code, byCueId) =>
+    set((state) => ({
+      translations: { ...state.translations, [code]: { ...(state.translations[code] ?? {}), ...byCueId } },
+      activeLanguage: code,
+      translating: false,
+      translateProgress: null,
+      translateError: null,
+    })),
+
+  clearTranslation: (code) =>
+    set((state) => {
+      const next = { ...state.translations };
+      delete next[code];
+      return { translations: next, activeLanguage: state.activeLanguage === code ? null : state.activeLanguage };
+    }),
+
+  setTranslating: (patch) =>
+    set((state) => ({
+      translating: patch.translating ?? state.translating,
+      translateProgress: patch.progress === undefined ? state.translateProgress : patch.progress,
+      translateError: patch.error === undefined ? state.translateError : patch.error,
+    })),
+
   setCues: (cues) => set({ cues: normaliseCues(cues) }),
   loadSrt: (raw) => {
     const cues = parseSRT(raw);
@@ -315,7 +398,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ cues: autoFitToDuration(cues, target) });
   },
   rezeroTimeline: () => set((state) => ({ cues: rezero(state.cues) })),
-  exportSrt: () => toSRT(get().cues),
+  exportSrt: () => toSRT(get().activeCues()),
 
   clips: [],
   selectedClipId: null,
@@ -479,7 +562,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   spokenSeconds: () => estimateSpeechSeconds(get().cues.map((c) => c.text).join(' ')),
 
   buildPlan: () => {
-    const { cues, aspect, subtitleStyle, watermark, music, clips } = get();
+    const { aspect, subtitleStyle, watermark, music, clips } = get();
+    // Burn the active language's cues, not the source-language list.
+    const cues = get().activeCues();
     const sequence = clips.reduce((max, c) => Math.max(max, clipEnd(c)), 0);
     const durationSec = Math.min(Math.max(sequence, totalDuration(cues), 1), MAX_DURATION_SEC);
     return {
@@ -504,6 +589,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       timelineZoom: 26,
       cues: [],
       selectedCueId: null,
+      translations: {},
+      activeLanguage: null,
+      translating: false,
+      translateProgress: null,
+      translateError: null,
       playhead: 0,
       playing: false,
       voice: EMPTY_VOICE,

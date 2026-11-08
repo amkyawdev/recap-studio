@@ -5,6 +5,7 @@ import {
   AudioLines,
   Cpu,
   Crop,
+  Languages,
   Layers,
   MonitorPlay,
   Pause,
@@ -30,6 +31,7 @@ import { VideoTimeline, TimelineTransport } from '@/components/editor/video-time
 import { Inspector, ToolRail } from '@/components/editor/inspector';
 import { useEditorStore } from '@/store/use-editor-store';
 import { MAX_DURATION_SEC } from '@/lib/ffmpeg/render-engine';
+import { findLanguage } from '@/lib/api/gemini';
 import { formatClock } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 
@@ -85,6 +87,12 @@ function TopBar() {
   const overLimit = useEditorStore((s) => s.overLimit());
   const sequenceDuration = useEditorStore((s) => s.sequenceDuration());
   const clipCount = useEditorStore((s) => s.clips.length);
+  const activeLanguage = useEditorStore((s) => s.activeLanguage);
+  const setActiveLanguage = useEditorStore((s) => s.setActiveLanguage);
+  const translations = useEditorStore((s) => s.translations);
+
+  const language = activeLanguage ? findLanguage(activeLanguage) : undefined;
+  const translated = Object.keys(translations).length;
 
   return (
     <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/[0.07] bg-black/40 px-3 py-2 backdrop-blur-xl sm:px-4">
@@ -109,6 +117,23 @@ function TopBar() {
       </div>
 
       <div className="flex items-center gap-1.5">
+        {/* Active subtitle track — click to return to the original language. */}
+        {translated > 0 && (
+          <button
+            type="button"
+            onClick={() => setActiveLanguage(null)}
+            title={activeLanguage ? 'Switch back to the original language' : 'Original language active'}
+            className={cn(
+              'pill hidden h-7 gap-1.5 border px-2.5 text-2xs sm:inline-flex',
+              activeLanguage
+                ? 'border-violet-500/35 bg-violet-500/[0.12] text-violet-200'
+                : 'border-white/[0.1] text-white/45',
+            )}
+          >
+            <Languages className="size-3" />
+            {language ? `${language.label}` : 'Original'}
+          </button>
+        )}
         <span className="pill hidden h-7 gap-1.5 border border-signal-green/25 bg-signal-green/[0.07] px-2.5 text-2xs text-signal-green sm:inline-flex">
           <span className="size-1.5 rounded-full bg-signal-green" />
           on-device

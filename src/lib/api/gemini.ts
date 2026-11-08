@@ -116,6 +116,208 @@ export interface GeminiTtsRequest {
   model?: string;
 }
 
+/* ------------------------------------------------------------------ */
+/* Subtitle translation                                                */
+/* ------------------------------------------------------------------ */
+
+export interface LanguageOption {
+  /** BCP-47-ish code, used as the translation-map key. */
+  code: string;
+  /** English label shown in the picker. */
+  label: string;
+  /** Endonym, shown as a subtitle so users can find their own language. */
+  native: string;
+}
+
+/**
+ * Target languages offered by the subtitle translator.
+ *
+ * The list is deliberately short and hand-picked: these are the languages the
+ * studio's audience actually asks for, and a short list keeps the picker usable
+ * on a phone. Gemini accepts anything, so widening this array is the only change
+ * needed to support more.
+ */
+export const LANGUAGES: LanguageOption[] = [
+  { code: 'my', label: 'Burmese', native: 'မြန်မာ' },
+  { code: 'th', label: 'Thai', native: 'ไทย' },
+  { code: 'vi', label: 'Vietnamese', native: 'Tiếng Việt' },
+  { code: 'id', label: 'Indonesian', native: 'Bahasa Indonesia' },
+  { code: 'hi', label: 'Hindi', native: 'हिन्दी' },
+  { code: 'zh', label: 'Chinese (Simplified)', native: '简体中文' },
+  { code: 'ja', label: 'Japanese', native: '日本語' },
+  { code: 'ko', label: 'Korean', native: '한국어' },
+  { code: 'es', label: 'Spanish', native: 'Español' },
+  { code: 'fr', label: 'French', native: 'Français' },
+  { code: 'pt', label: 'Portuguese', native: 'Português' },
+  { code: 'ar', label: 'Arabic', native: 'العربية' },
+];
+
+export function findLanguage(code: string): LanguageOption | undefined {
+  return LANGUAGES.find((l) => l.code === code);
+}
+
+export interface TranslateRequest {
+  /** One string per subtitle cue, in timeline order. */
+  lines: string[];
+  /** Target language label, e.g. "Burmese (Myanmar)". */
+  target: string;
+  /** Optional synopsis so pronouns and names stay consistent across batches. */
+  context?: string;
+  model?: string;
+  /** Called after each batch with (completed, total) cue counts. */
+  onProgress?: (completed: number, total: number) => void;
+  signal?: AbortSignal;
+}
+
+export interface TranslateResult {
+  /** Translated lines, same length and order as the input. */
+  lines: string[];
+  model: string;
+  /** Batches that needed the per-line retry because the model broke the contract. */
+  retriedBatches: number;
+  /** Individual lines that still failed and kept their source text. */
+  keptOriginal: number;
+}
+
+const TRANSLATE_BATCH_SIZE = 40;
+
+/**
+ * Translate a cue list into another language.
+ *
+ * Contract: the model receives a JSON array of strings and must return a JSON
+ * array of the *same length*. Anything else is treated as a bad batch. On a bad
+ * batch the lines are split and retried once individually, and any line that
+ * still fails keeps its original text — a translation run never loses timing,
+ * and never silently drops a cue.
+ */
+export async function translateCues(
+  router: ClientRouter,
+  req: TranslateRequest,
+): Promise<TranslateResult> {
+  const key = router.keyFor('gemini');
+  const model = req.model ?? 'gemini-2.5-flash';
+  const total = req.lines.length;
+  const out: string[] = new Array(total);
+  let retriedBatches = 0;
+  let keptOriginal = 0;
+  let completed = 0;
+
+  for (let start = 0; start < total; start += TRANSLATE_BATCH_SIZE) {
+    if (req.signal?.aborted) throw new ApiError('Translation cancelled.', undefined, 'gemini');
+    const batch = req.lines.slice(start, start + TRANSLATE_BATCH_SIZE);
+    let translated: string[] | null = null;
+
+    try {
+      translated = await translateBatch(router, key, model, batch, req.target, req.context);
+    } catch {
+      translated = null;
+    }
+
+    if (!translated || translated.length !== batch.length) {
+      // Retry the batch line by line — smaller requests are far more reliable.
+      retriedBatches += 1;
+      const salvaged = await Promise.all(
+        batch.map(async (line) => {
+          if (!line.trim()) return line;
+          try {
+            const one = await translateBatch(router, key, model, [line], req.target, req.context);
+            return one?.[0] ?? line;
+          } catch {
+            return line;
+          }
+        }),
+      );
+      translated = salvaged;
+    }
+
+    for (let i = 0; i < batch.length; i += 1) {
+      const value = translated[i] ?? batch[i];
+      // A line is "kept original" when it came back identical to the source
+      // *and* the source had words to translate.
+      if (value === batch[i] && batch[i].trim().length > 0) keptOriginal += 1;
+      out[start + i] = value;
+    }
+    completed += batch.length;
+    req.onProgress?.(completed, total);
+  }
+
+  return { lines: out, model, retriedBatches, keptOriginal };
+}
+
+async function translateBatch(
+  router: ClientRouter,
+  key: string,
+  model: string,
+  batch: string[],
+  target: string,
+  context?: string,
+): Promise<string[] | null> {
+  const prompt = [
+    `You are a professional subtitle translator for film and television.`,
+    `Translate the JSON array of subtitle lines into ${target}.`,
+    '',
+    'Rules:',
+    '- Return JSON only: {"lines": ["...", "..."]} — the same number of entries, in the same order.',
+    '- Translate meaning, not word for word. Subtitles must read naturally aloud.',
+    '- Keep each line about the same length as the original so it fits the same screen time.',
+    '- Preserve proper nouns, sound cues and formatting. Do not add or remove lines.',
+    '- Never merge two lines into one or split one line into two.',
+    '- If a line is untranslatable (a name, a sound effect), repeat it unchanged.',
+    context ? `Context for consistency: ${context}` : '',
+    '',
+    'Lines:',
+    JSON.stringify(batch),
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const response = await router.request(
+    'gemini',
+    `${BASE}/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.4, responseMimeType: 'application/json' },
+      }),
+    },
+    120_000,
+  );
+
+  const payload = (await response.json()) as GeminiResponse;
+  const text = extractText(payload);
+  if (!text) return null;
+
+  const parsed = safeJson(text) as { lines?: unknown } | string[] | null;
+  if (Array.isArray(parsed)) return parsed.map(String);
+  if (parsed && Array.isArray((parsed as { lines?: unknown }).lines)) {
+    return ((parsed as { lines: unknown[] }).lines).map(String);
+  }
+  return null;
+}
+
+/** Parse model output that may be wrapped in a markdown fence. */
+function safeJson(text: string): unknown {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```$/, '')
+    .trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Last resort: grab the outermost array.
+    const match = /\[[\s\S]*\]/.exec(cleaned);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
 export interface TtsAudio {
   data: ArrayBuffer;
   mimeType: string;
