@@ -1,12 +1,11 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Maximize2, Pause, Play, RectangleHorizontal, RectangleVertical, SkipBack, SkipForward, Volume2 } from 'lucide-react';
+import { Maximize2, Play, RectangleHorizontal, RectangleVertical } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useEditorStore } from '@/store/use-editor-store';
+import { useEditorStore, clipAt, clipEnd, sequenceToSource } from '@/store/use-editor-store';
 import { ASPECT_PRESETS } from '@/lib/ffmpeg/render-engine';
 import { cueAt } from '@/lib/utils/srt-parser';
-import { formatClock } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -20,6 +19,7 @@ import { cn } from '@/lib/utils/cn';
 
 export function PreviewStage() {
   const source = useEditorStore((s) => s.source);
+  const clips = useEditorStore((s) => s.clips);
   const cues = useEditorStore((s) => s.cues);
   const aspect = useEditorStore((s) => s.aspect);
   const setAspect = useEditorStore((s) => s.setAspect);
@@ -38,27 +38,73 @@ export function PreviewStage() {
   const vertical = aspect === '9:16';
 
   const activeCue = useMemo(() => cueAt(cues, playhead), [cues, playhead]);
+  const activeClip = useMemo(() => clipAt(clips, playhead), [clips, playhead]);
+
+  // The sequence clock is what the user scrubs; the media element follows the
+  // clip's source window, so trimming and splitting are visible immediately.
+  const sequenceDuration = useMemo(
+    () => Math.max(clips.reduce((max, c) => Math.max(max, clipEnd(c)), 0), duration, 1),
+    [clips, duration],
+  );
+
+  const sourceTime = useMemo(() => sequenceToSource(clips, playhead), [clips, playhead]);
 
   // Keep the media element in step with the shared playhead/playing state.
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-    if (playing) void el.play().catch(() => setPlaying(false));
+    if (playing && sourceTime !== null) void el.play().catch(() => setPlaying(false));
     else el.pause();
-  }, [playing, setPlaying]);
+  }, [playing, setPlaying, sourceTime]);
 
   useEffect(() => {
     const el = videoRef.current;
-    if (!el) return;
-    if (Math.abs(el.currentTime - playhead) > 0.35) el.currentTime = playhead;
-  }, [playhead]);
+    if (!el || sourceTime === null) return;
+    if (Math.abs(el.currentTime - sourceTime) > 0.18) el.currentTime = sourceTime;
+  }, [sourceTime]);
+
+  // Advance the sequence clock from the media element while playing.
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      const el = videoRef.current;
+      if (el && activeClip) {
+        const next = useEditorStore.getState().playhead + dt * activeClip.speed;
+        const clipLimit = clipEnd(activeClip);
+        if (next >= clipLimit) {
+          // Hop to the start of whatever clip comes next, or stop at the end.
+          const after = clips
+            .filter((c) => c.startSec >= clipLimit - 0.01)
+            .sort((a, b) => a.startSec - b.startSec)[0];
+          if (after) {
+            setPlayhead(after.startSec);
+            el.currentTime = after.inSec;
+          } else {
+            setPlayhead(sequenceDuration);
+            setPlaying(false);
+          }
+        } else {
+          setPlayhead(next);
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, activeClip, clips, sequenceDuration, setPlayhead, setPlaying]);
 
   const scrub = (value: number) => {
     setPlayhead(value);
-    if (videoRef.current) videoRef.current.currentTime = value;
+    const mapped = sequenceToSource(clips, value);
+    if (videoRef.current && mapped !== null) videoRef.current.currentTime = mapped;
   };
 
-  const totalDuration = Math.max(duration, cues.reduce((m, c) => Math.max(m, c.end), 0), 1);
+  const totalDuration = sequenceDuration;
+
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -106,7 +152,6 @@ export function PreviewStage() {
               playsInline
               muted={!voice.audioUrl}
               onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-              onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)}
               onEnded={() => setPlaying(false)}
               className="absolute inset-0 size-full object-cover"
             />
@@ -170,45 +215,6 @@ export function PreviewStage() {
           <span className="pointer-events-none absolute inset-x-0 top-0 z-10 h-16 animate-scan bg-gradient-to-b from-white/[0.05] to-transparent" />
         </motion.div>
       </div>
-
-      {/* Transport */}
-      <div className="space-y-2">
-        <div className="relative">
-          <input
-            type="range"
-            min={0}
-            max={Math.max(totalDuration, 0.1)}
-            step={0.05}
-            value={Math.min(playhead, totalDuration)}
-            onChange={(e) => scrub(Number(e.target.value))}
-            className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/[0.08] [&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <span className="mono-num text-2xs text-white/45">
-            {formatClock(playhead)} / {formatClock(totalDuration)}
-          </span>
-
-          <div className="flex items-center gap-1">
-            <TransportButton icon={SkipBack} onClick={() => scrub(Math.max(0, playhead - 5))} label="Back 5s" />
-            <button
-              type="button"
-              onClick={() => setPlaying(!playing)}
-              aria-label={playing ? 'Pause' : 'Play'}
-              className="pill size-10 border border-white/[0.12] bg-white/[0.06] text-white hover:bg-white/[0.1] active:scale-95"
-            >
-              {playing ? <Pause className="size-4" /> : <Play className="size-4 translate-x-[1px]" />}
-            </button>
-            <TransportButton icon={SkipForward} onClick={() => scrub(Math.min(totalDuration, playhead + 5))} label="Forward 5s" />
-          </div>
-
-          <span className="mono-num flex items-center gap-1 text-2xs text-white/45">
-            <Volume2 className="size-3" />
-            {voice.audioUrl ? 'narration' : 'source'}
-          </span>
-        </div>
-      </div>
     </div>
   );
 }
@@ -235,27 +241,6 @@ function RatioButton({
     >
       <Icon className="size-3" />
       {label}
-    </button>
-  );
-}
-
-function TransportButton({
-  icon: Icon,
-  onClick,
-  label,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  onClick: () => void;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      className="pill size-8 text-white/50 hover:bg-white/[0.06] hover:text-white active:scale-90"
-    >
-      <Icon className="size-4" />
     </button>
   );
 }

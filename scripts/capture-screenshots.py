@@ -1,7 +1,14 @@
-"""Capture README screenshots for Recap Studio.
+"""Capture the README screenshots for Recap Studio.
 
-Renders four key routes against the local dev server using the system
-Chromium build (no bundled browser download needed).
+Runs against the local dev server using the system Chromium build.
+
+Usage
+    npm run dev            # in one shell
+    npm run screenshots    # in another
+
+The editor shots seed a demo project through the development-only store bridge
+(`window.__recapStore`) so the timeline, inspector and preview show real
+content instead of the empty state.
 """
 
 import asyncio
@@ -13,13 +20,28 @@ BASE = "http://localhost:12000"
 OUT = pathlib.Path("docs/screenshots")
 CHROMIUM = "/usr/bin/chromium"
 
-# (file stem, route, viewport, full_page, pre_render actions)
-PAGES = [
-    ("landing", "/", {"width": 1440, "height": 960}, False, None),
-    ("editor", "/editor", {"width": 430, "height": 932}, False, "load-sample"),
-    ("api-settings", "/api-settings", {"width": 1440, "height": 900}, False, None),
-    ("download", "/download", {"width": 1440, "height": 900}, False, None),
-]
+DESKTOP = {"width": 1440, "height": 900}
+NLE = {"width": 1600, "height": 1000}
+PHONE = {"width": 430, "height": 932}
+
+# A demo project so the editor screenshots are not empty.
+SEED = """() => {
+  const s = window.__recapStore.editor.getState();
+  s.setSource({ kind: 'file', ref: 'demo.mp4', title: 'signal-lost-1080p.mp4', durationSec: 96 });
+  s.loadSample();
+  s.setPlayhead(6.4);
+  s.setInspectorTab('clip');
+}"""
+
+
+async def settle(page, ms=1500):
+    await page.wait_for_timeout(ms)
+
+
+async def shoot(page, name, viewport, full_page=False):
+    target = OUT / f"{name}.png"
+    await page.screenshot(path=str(target), full_page=full_page)
+    print(f"  {target.name:22s} {viewport['width']}x{viewport['height']}  {target.stat().st_size // 1024} KB")
 
 
 async def main() -> None:
@@ -31,27 +53,45 @@ async def main() -> None:
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
 
-        for stem, route, viewport, full_page, action in PAGES:
-            context = await browser.new_context(
-                viewport=viewport,
-                device_scale_factor=2,
-                color_scheme="dark",
-            )
-            page = await context.new_page()
+        # ---- desktop pages -------------------------------------------------
+        for name, route in [
+            ("landing", "/"),
+            ("api-settings", "/api-settings"),
+            ("download", "/download"),
+        ]:
+            ctx = await browser.new_context(viewport=DESKTOP, device_scale_factor=2, color_scheme="dark")
+            page = await ctx.new_page()
             await page.goto(f"{BASE}{route}", wait_until="networkidle")
+            await settle(page)
+            await shoot(page, name, DESKTOP)
+            await ctx.close()
 
-            if action == "load-sample":
-                # Populate the timeline so the editor is not captured empty.
-                await page.get_by_role("button", name="Load sample").click()
-                await page.wait_for_timeout(900)
+        # ---- desktop editor (the NLE layout) -------------------------------
+        ctx = await browser.new_context(viewport=NLE, device_scale_factor=2, color_scheme="dark")
+        page = await ctx.new_page()
+        await page.goto(f"{BASE}/editor", wait_until="networkidle")
+        await settle(page, 900)
+        await page.evaluate(SEED)
+        await settle(page, 1600)
+        await shoot(page, "editor-desktop", NLE)
 
-            # Let entry animations settle before the shutter.
-            await page.wait_for_timeout(1400)
+        # Effects tab so the inspector shows the frame/watermark controls.
+        await page.evaluate("() => window.__recapStore.editor.getState().setInspectorTab('effects')")
+        await settle(page, 900)
+        await shoot(page, "editor-inspector", NLE)
+        await ctx.close()
 
-            target = OUT / f"{stem}.png"
-            await page.screenshot(path=str(target), full_page=full_page)
-            print(f"  {target}  ({viewport['width']}x{viewport['height']})")
-            await context.close()
+        # ---- mobile editor -------------------------------------------------
+        ctx = await browser.new_context(
+            viewport=PHONE, device_scale_factor=3, color_scheme="dark", is_mobile=True, has_touch=True
+        )
+        page = await ctx.new_page()
+        await page.goto(f"{BASE}/editor", wait_until="networkidle")
+        await settle(page, 900)
+        await page.evaluate(SEED)
+        await settle(page, 1600)
+        await shoot(page, "editor-mobile", PHONE)
+        await ctx.close()
 
         await browser.close()
 

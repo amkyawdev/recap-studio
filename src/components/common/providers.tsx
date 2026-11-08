@@ -2,6 +2,8 @@
 
 import { MotionConfig } from 'framer-motion';
 import { useEffect } from 'react';
+import { useEditorStore } from '@/store/use-editor-store';
+import { useApiKeysStore } from '@/store/use-api-keys-store';
 
 /**
  * Client-side app shell providers.
@@ -20,6 +22,17 @@ export function Providers({ children }: { children: React.ReactNode }) {
     };
     if (document.readyState === 'complete') register();
     else window.addEventListener('load', register, { once: true });
+  }, []);
+
+  // Development-only console bridge so the stores can be driven from devtools
+  // and from browser automation. Never attached in a production bundle.
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production') return;
+    const bridge = { editor: useEditorStore, apiKeys: useApiKeysStore };
+    (window as unknown as { __recapStore?: typeof bridge }).__recapStore = bridge;
+    return () => {
+      delete (window as unknown as { __recapStore?: typeof bridge }).__recapStore;
+    };
   }, []);
 
   return (

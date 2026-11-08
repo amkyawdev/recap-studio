@@ -33,6 +33,67 @@ export type EditorPanel = 'subtitle' | 'voice' | 'overlay' | 'render';
 export type TtsProvider = 'elevenlabs' | 'gemini';
 export type SourceKind = 'youtube' | 'file' | 'none';
 
+/** Inspector tabs on the right rail — mirrors CapCut's context panels. */
+export type InspectorTab = 'clip' | 'text' | 'audio' | 'effects';
+
+/** Which horizontal lane a block lives on in the multitrack timeline. */
+export type TrackId = 'video' | 'subtitle' | 'audio' | 'overlay';
+
+/**
+ * A segment of the source media placed on the video track.
+ *
+ * `inSec`/`outSec` index into the *source* file; `startSec` is where the clip
+ * begins on the *sequence*. Trimming changes the in/out pair, moving changes
+ * `startSec`, and splitting produces two clips that share the source.
+ */
+export interface Clip {
+  id: string;
+  /** Source key — reserved for multi-source projects; single source today. */
+  sourceRef: string;
+  inSec: number;
+  outSec: number;
+  startSec: number;
+  label: string;
+  /** Playback rate; 1 is normal speed. */
+  speed: number;
+  /** Clip-local gain, 0..2. */
+  volume: number;
+  /** Video opacity, 0..1. */
+  opacity: number;
+  muted: boolean;
+}
+
+/** Source-seconds -> sequence-seconds for a clip of the given duration. */
+export function clipDuration(clip: Clip): number {
+  return Math.max(0, (clip.outSec - clip.inSec) / Math.max(0.1, clip.speed));
+}
+
+export function clipEnd(clip: Clip): number {
+  return clip.startSec + clipDuration(clip);
+}
+
+/** The clip covering a sequence time, if any. */
+export function clipAt(clips: Clip[], sequenceSec: number): Clip | undefined {
+  return clips.find((c) => sequenceSec >= c.startSec && sequenceSec < clipEnd(c));
+}
+
+/**
+ * Map a sequence time onto the source timeline.
+ * Returns null when the playhead sits in a gap between clips.
+ */
+export function sequenceToSource(clips: Clip[], sequenceSec: number): number | null {
+  const clip = clipAt(clips, sequenceSec);
+  if (!clip) return null;
+  return clip.inSec + (sequenceSec - clip.startSec) * clip.speed;
+}
+
+/** Where a given source time lands on the sequence (first matching clip). */
+export function sourceToSequence(clips: Clip[], sourceSec: number): number | null {
+  const clip = clips.find((c) => sourceSec >= c.inSec && sourceSec <= c.outSec);
+  if (!clip) return null;
+  return clip.startSec + (sourceSec - clip.inSec) / Math.max(0.1, clip.speed);
+}
+
 export interface SourceVideo {
   kind: SourceKind;
   /** YouTube id, or the original file name. */
@@ -90,6 +151,30 @@ export interface EditorState {
   rezeroTimeline: () => void;
   exportSrt: () => string;
 
+  // ---- multitrack timeline ------------------------------------------
+  clips: Clip[];
+  selectedClipId: string | null;
+  /** Pixels per second on the timeline ruler. */
+  timelineZoom: number;
+  /** Magnetic snapping to block edges and the playhead. */
+  snapping: boolean;
+  setTimelineZoom: (zoom: number) => void;
+  toggleSnapping: () => void;
+  addClipFromSource: () => void;
+  updateClip: (id: string, patch: Partial<Clip>) => void;
+  moveClip: (id: string, startSec: number) => void;
+  trimClip: (id: string, edge: 'in' | 'out', deltaSec: number) => void;
+  splitClipAtPlayhead: () => void;
+  duplicateClip: (id: string) => void;
+  removeClip: (id: string) => void;
+  selectClip: (id: string | null) => void;
+  /** Snap a candidate time to nearby edges when `snapping` is on. */
+  snapTime: (value: number, ignoreId?: string) => number;
+
+  // ---- inspector ----------------------------------------------------
+  inspectorTab: InspectorTab;
+  setInspectorTab: (tab: InspectorTab) => void;
+
   // ---- playback -----------------------------------------------------
   playhead: number;
   playing: boolean;
@@ -118,6 +203,8 @@ export interface EditorState {
 
   // ---- derived ------------------------------------------------------
   duration: () => number;
+  /** Length of the video track alone — what the renderer encodes. */
+  sequenceDuration: () => number;
   overLimit: () => boolean;
   wordCount: () => number;
   spokenSeconds: () => number;
@@ -147,8 +234,24 @@ const IDLE_PROGRESS: RenderProgress = {
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   source: EMPTY_SOURCE,
-  setSource: (source) => set({ source }),
-  clearSource: () => set({ source: EMPTY_SOURCE }),
+  setSource: (source) => {
+    // Landing a new source seeds the video track with one full-length clip so
+    // the timeline is never empty after an import.
+    const clip: Clip = {
+      id: `clip-${Date.now()}`,
+      sourceRef: source.ref || source.title,
+      inSec: 0,
+      outSec: source.durationSec > 0 ? source.durationSec : 30,
+      startSec: 0,
+      label: source.title,
+      speed: 1,
+      volume: 1,
+      opacity: 1,
+      muted: false,
+    };
+    set({ source, clips: [clip], selectedClipId: clip.id });
+  },
+  clearSource: () => set({ source: EMPTY_SOURCE, clips: [], selectedClipId: null }),
 
   cues: [],
   selectedCueId: null,
@@ -214,6 +317,130 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rezeroTimeline: () => set((state) => ({ cues: rezero(state.cues) })),
   exportSrt: () => toSRT(get().cues),
 
+  clips: [],
+  selectedClipId: null,
+  timelineZoom: 26,
+  snapping: true,
+  setTimelineZoom: (zoom) => set({ timelineZoom: Math.min(160, Math.max(6, zoom)) }),
+  toggleSnapping: () => set((state) => ({ snapping: !state.snapping })),
+
+  addClipFromSource: () => {
+    const { source, clips } = get();
+    const duration = source.durationSec > 0 ? source.durationSec : 30;
+    const tail = clips.reduce((max, c) => Math.max(max, clipEnd(c)), 0);
+    const clip: Clip = {
+      id: `clip-${Date.now()}`,
+      sourceRef: source.ref || source.title,
+      inSec: 0,
+      outSec: duration,
+      startSec: round3(tail),
+      label: source.title,
+      speed: 1,
+      volume: 1,
+      opacity: 1,
+      muted: false,
+    };
+    set({ clips: [...clips, clip], selectedClipId: clip.id });
+  },
+
+  updateClip: (id, patch) =>
+    set((state) => ({
+      clips: state.clips.map((c) => (c.id === id ? clampClip({ ...c, ...patch }) : c)),
+    })),
+
+  moveClip: (id, startSec) =>
+    set((state) => ({
+      clips: state.clips.map((c) =>
+        c.id === id ? { ...c, startSec: round3(Math.max(0, startSec)) } : c,
+      ),
+    })),
+
+  trimClip: (id, edge, deltaSec) =>
+    set((state) => ({
+      clips: state.clips.map((c) => {
+        if (c.id !== id) return c;
+        const sourceMax = get().source.durationSec || c.outSec;
+        if (edge === 'in') {
+          // Dragging the left edge also shifts the clip's sequence position so
+          // the visible frames stay put — the CapCut/Alight Motion behaviour.
+          const nextIn = Math.min(Math.max(0, c.inSec + deltaSec), c.outSec - 0.2);
+          const shift = (nextIn - c.inSec) / Math.max(0.1, c.speed);
+          return { ...c, inSec: round3(nextIn), startSec: round3(Math.max(0, c.startSec + shift)) };
+        }
+        const nextOut = Math.max(c.inSec + 0.2, Math.min(sourceMax, c.outSec + deltaSec));
+        return { ...c, outSec: round3(nextOut) };
+      }),
+    })),
+
+  splitClipAtPlayhead: () => {
+    const { clips, playhead, selectedClipId } = get();
+    // Prefer the selected clip; otherwise split whatever the playhead is over.
+    const target =
+      clips.find((c) => c.id === selectedClipId && playhead > c.startSec && playhead < clipEnd(c)) ??
+      clips.find((c) => playhead > c.startSec && playhead < clipEnd(c));
+    if (!target) return;
+
+    const offsetSec = (playhead - target.startSec) * target.speed;
+    const cutSource = round3(target.inSec + offsetSec);
+    if (cutSource <= target.inSec + 0.2 || cutSource >= target.outSec - 0.2) return;
+
+    const left: Clip = { ...target, outSec: cutSource };
+    const right: Clip = {
+      ...target,
+      id: `clip-${Date.now()}`,
+      inSec: cutSource,
+      startSec: round3(playhead),
+    };
+    const index = clips.findIndex((c) => c.id === target.id);
+    const next = [...clips.slice(0, index), left, right, ...clips.slice(index + 1)];
+    set({ clips: next, selectedClipId: right.id });
+  },
+
+  duplicateClip: (id) => {
+    const { clips } = get();
+    const original = clips.find((c) => c.id === id);
+    if (!original) return;
+    const copy: Clip = {
+      ...original,
+      id: `clip-${Date.now()}`,
+      startSec: round3(clipEnd(original)),
+    };
+    set({ clips: [...clips, copy], selectedClipId: copy.id });
+  },
+
+  removeClip: (id) =>
+    set((state) => ({
+      clips: state.clips.filter((c) => c.id !== id),
+      selectedClipId: state.selectedClipId === id ? null : state.selectedClipId,
+    })),
+
+  selectClip: (id) => set({ selectedClipId: id }),
+
+  snapTime: (value, ignoreId) => {
+    const { snapping, clips, cues, playhead } = get();
+    if (!snapping) return value;
+    const threshold = 8 / get().timelineZoom; // ~8px of travel
+    const targets = [
+      playhead,
+      0,
+      ...clips.filter((c) => c.id !== ignoreId).flatMap((c) => [c.startSec, clipEnd(c)]),
+      ...cues.map((c) => c.start),
+    ];
+    let best = value;
+    let bestDelta = threshold;
+    for (const target of targets) {
+      const delta = Math.abs(target - value);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = target;
+      }
+    }
+    return round3(best);
+  },
+
+  inspectorTab: 'clip',
+  setInspectorTab: (inspectorTab) => set({ inspectorTab }),
+
   playhead: 0,
   playing: false,
   setPlayhead: (value) => set({ playhead: Math.max(0, value) }),
@@ -236,14 +463,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   render: { progress: IDLE_PROGRESS, running: false },
   setRender: (patch) => set((state) => ({ render: { ...state.render, ...patch } })),
 
-  duration: () => Math.max(totalDuration(get().cues), get().source.durationSec),
-  overLimit: () => totalDuration(get().cues) > MAX_DURATION_SEC + 0.5,
+  duration: () => {
+    const { clips, cues, source } = get();
+    const sequence = clips.reduce((max, c) => Math.max(max, clipEnd(c)), 0);
+    return Math.max(sequence, totalDuration(cues), source.durationSec);
+  },
+  /** Length of the video track alone — what the renderer actually encodes. */
+  sequenceDuration: () => get().clips.reduce((max, c) => Math.max(max, clipEnd(c)), 0),
+  overLimit: () => {
+    const { clips, cues } = get();
+    const sequence = clips.reduce((max, c) => Math.max(max, clipEnd(c)), 0);
+    return Math.max(sequence, totalDuration(cues)) > MAX_DURATION_SEC + 0.5;
+  },
   wordCount: () => countWords(get().cues.map((c) => c.text).join(' ')),
   spokenSeconds: () => estimateSpeechSeconds(get().cues.map((c) => c.text).join(' ')),
 
   buildPlan: () => {
-    const { cues, aspect, subtitleStyle, watermark, music } = get();
-    const durationSec = Math.min(Math.max(totalDuration(cues), 1), MAX_DURATION_SEC);
+    const { cues, aspect, subtitleStyle, watermark, music, clips } = get();
+    const sequence = clips.reduce((max, c) => Math.max(max, clipEnd(c)), 0);
+    const durationSec = Math.min(Math.max(sequence, totalDuration(cues), 1), MAX_DURATION_SEC);
     return {
       ...DEFAULT_PLAN,
       aspect,
@@ -260,6 +498,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   reset: () =>
     set({
       source: EMPTY_SOURCE,
+      clips: [],
+      selectedClipId: null,
+      inspectorTab: 'clip',
+      timelineZoom: 26,
       cues: [],
       selectedCueId: null,
       playhead: 0,
@@ -272,6 +514,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
 function round3(n: number) {
   return Math.round(n * 1000) / 1000;
+}
+
+/** Keep clip fields inside sane bounds after an edit. */
+function clampClip(clip: Clip): Clip {
+  const speed = Math.min(4, Math.max(0.25, clip.speed));
+  return {
+    ...clip,
+    speed,
+    inSec: round3(Math.max(0, Math.min(clip.inSec, clip.outSec - 0.2))),
+    outSec: round3(Math.max(clip.inSec + 0.2, clip.outSec)),
+    startSec: round3(Math.max(0, clip.startSec)),
+    volume: Math.min(2, Math.max(0, clip.volume)),
+    opacity: Math.min(1, Math.max(0, clip.opacity)),
+  };
 }
 
 /** Words the pacing model allows inside the render ceiling. */
