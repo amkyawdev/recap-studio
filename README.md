@@ -6,6 +6,31 @@ the browser, with your own API keys.
 
 Built with Next.js 14 (App Router), Tailwind, Framer Motion, Zustand and FFmpeg.wasm.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/landing.png" alt="Landing page: pitch-black hero with a violet-to-gold headline, a studio mockup, and an update badge" />
+      <p align="center"><sub><b>Landing</b> — the pitch-black hero, signal gradient and studio mockup.</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/editor.png" alt="Editor on a phone: 9:16 preview stage, pacing budget and an SRT timeline with sample cues" />
+      <p align="center"><sub><b>Editor</b> — mobile 9:16 stage, pacing budget and the SRT timeline.</sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/api-settings.png" alt="API settings: passphrase vault gate, vault status panel, and provider key cards for Gemini, AI Studio, ElevenLabs and AssemblyAI" />
+      <p align="center"><sub><b>API Settings</b> — the encrypted vault gate and per-provider key cards.</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/download.png" alt="Download hub: PWA install, FFmpeg core binaries, automated builds and release notes" />
+      <p align="center"><sub><b>Download</b> — PWA install, FFmpeg core binaries and CI releases.</sub></p>
+    </td>
+  </tr>
+</table>
+
 ## Highlights
 
 - **BYOK, encrypted.** Provider keys live in an AES-GCM-256 vault behind a passphrase
@@ -39,6 +64,7 @@ Open `/api-settings`, create a vault passphrase, and paste at least one provider
 | `npm run lint` | ESLint |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run fetch:ffmpeg` | Download the FFmpeg core into `public/ffmpeg` |
+| `npm run screenshots` | Regenerate the README screenshots (needs `npm run dev` + Playwright) |
 | `npm run relay:dev` | Run the Cloudflare Worker relay locally |
 | `npm run relay:deploy` | Deploy the relay |
 

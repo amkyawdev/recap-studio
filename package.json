@@ -11,6 +11,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+    "screenshots": "python3 scripts/capture-screenshots.py",
     "relay:dev": "wrangler dev --config cloudflare-worker/wrangler.toml",
     "relay:deploy": "wrangler deploy --config cloudflare-worker/wrangler.toml"
   },
